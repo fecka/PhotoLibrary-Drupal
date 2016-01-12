@@ -1,0 +1,640 @@
+<?php
+
+/**
+ *  Implements hook_block_info().
+ */
+function photo_library_block_info() {
+  $blocks = array(); 
+  $blocks['photo_library'] = array(
+    'info' => t('Photo Library'),
+    'cache' => DRUPAL_NO_CACHE
+  );
+  return $blocks;
+}
+
+/**
+ *  Implements hook_menu().
+ */
+function photo_library_menu() {
+  $items = array();
+
+  $items['admin/manage/photo_library'] = array(
+    'title'           => 'Photo Library',
+    'page callback'    => 'manage_photo_library',
+    'access arguments' => array('administer blocks'),
+    'type'            => MENU_NORMAL_ITEM
+  );
+
+  $items['admin/manage/photo_library/add'] = array(
+    'title' => 'Add new photo',
+    'page callback' => 'photo_library_add_page',
+    'access arguments' => array('administer blocks'),
+    'type' => MENU_LOCAL_ACTION,
+  );
+
+  $items['admin/manage/photo_library/%photo_library/edit'] = array(
+    'title' => 'Edit',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('photo_library_form',3),
+    'access arguments' => array('administer blocks'),
+    'type' => MENU_LOCAL_TASK,
+  );
+
+  $items['admin/manage/photo_library/%photo_library/delete'] = array(
+    'title' => 'Edit',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('photo_library_delete_confirm',3),
+    'access arguments' => array('administer blocks'),
+    'type' => MENU_LOCAL_TASK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_block_view().
+ *
+ * @param string $delta
+ * @return array
+ */
+function photo_library_block_view($delta = '') {
+  if ($delta == 'photo_library') {
+    $path = drupal_get_path('module', 'photo_library');
+    $block = array('subject' => '', 'content' => theme('photo_library_render', array(
+      'data' => get_image_list(),
+      'filter' => get_filter_categories(),
+      'pager'=> theme('pager'),
+      )));
+
+    return $block;
+  }
+}
+
+/**
+ *  Get the list of images
+ */
+function get_image_list() {
+  $query = db_select('photo_library', 'a')->extend('MyPager');
+  $query->fields('a', array())
+        ->orderBy('title', 'ASC')
+        ->limit(16);
+
+  $category = isset($_POST['category']) ? (int)$_POST['category'] : null;
+
+  if ($category) {
+    $query->condition('a.category', $category, '=');
+  }
+
+  $result = $query->execute();
+
+  //initialize pager
+  pager_default_initialize($query->getTotalItemCount(), 16);
+
+  return $result;
+}
+
+/**
+ * @return array
+ */
+function get_filter_categories()
+{
+  $data = array();
+  $taxo = taxonomy_vocabulary_machine_name_load('gallery_category');
+  if ($taxo) {
+    $terms = taxonomy_get_tree($taxo->vid);
+    if (count($terms) > 0) {
+      return $terms;
+    }
+  }
+  return $data;
+}
+
+/**
+ * Implements hook_theme()
+ */
+function photo_library_theme() {
+  $module_path = drupal_get_path('module', 'photo_library');
+  $themes = array();
+
+  $themes['photo_library_render'] = array(
+    'template' => 'photo_library_render',
+    'path' => $module_path . '/templates/front',
+  );
+
+  return $themes;
+}
+
+/**
+ * @return mixed
+ */
+function manage_photo_library() {
+  return drupal_get_form('photo_library_overview');
+}
+
+/**
+ * @param $form
+ * @param $form_state
+ * @param $data
+ * @return mixed
+ */
+function photo_library_delete_confirm($form, &$form_state, $data) {
+  $form['#photo_library']['id'] = $data->id;
+
+  $name = $data->title;
+
+  return confirm_form($form,
+    t("Are you sure you want to delete %name?", array('%name' => $name)),
+    '<front>',
+    t("This action cannot be undone."),
+    t("Delete"),
+    t("Cancel")
+  );
+}
+
+/**
+ * @param $form
+ * @param $form_state
+ */
+function photo_library_delete_confirm_submit($form, &$form_state) {
+  if (isset($form['#photo_library']['id'])) {
+    $id = $form['#photo_library']['id'];
+    $entity = photo_library_load($id);
+    entity_get_controller('photo_library')->delete($entity);
+
+    drupal_set_message('The record has been deleted!'); 
+  }
+}
+
+/**
+* Page callback for pointer adding.
+*/
+function photo_library_add_page() {
+  // Create a basic entity structure to be used and passed to the validation
+  // and submission functions.
+  $entity = entity_get_controller('photo_library')->create();
+  return drupal_get_form('photo_library_form', $entity);
+}
+
+/**
+ * Get taxonomy categories
+ * @param null $id
+ * @return array
+ */
+function get_categories($id = null) {
+  $data = array(0 => 'None');
+  $taxo = taxonomy_vocabulary_machine_name_load('gallery_category');
+  if ($taxo) {
+    $terms = taxonomy_get_tree($taxo->vid);
+    if (count($terms) > 0) {
+      foreach ($terms as $row) {
+        $data[$row->tid] = $row->name;
+      }
+    }
+  }
+  if ($id !== null) {
+    return $data[$id];
+  }
+
+  return $data;
+}
+
+/**
+ * Generate update/edit form
+ *
+ * @param $form
+ * @param $form_state
+ * @param null $entity
+ * @return mixed
+ */
+function photo_library_form($form, &$form_state, $entity = NULL) {
+  $form['title'] = array(
+    '#title' => t('Title'),
+    '#type' => 'textfield',
+    '#default_value' => isset($entity->title) ? $entity->title : '',
+    '#required' => TRUE,
+  
+  );     
+  $form['image'] = array(
+    '#title' => t('Image'),
+    '#type' => 'managed_file',
+    '#description' => t('Upload a file'),
+    '#default_value' => isset($entity->image) ? $entity->image : '',
+    '#upload_location' => 'public://photo-library/',
+    '#upload_validators' => array(
+      'file_validate_extensions' => array('gif png jpg jpeg')
+    ),
+    '#required' => true,
+  );
+
+  $form['category'] = array(
+    '#title' => t('Category'),
+    '#type' => 'select',
+    '#options' => get_categories(),
+    '#default_value' => isset($entity->category) ? $entity->category : '',
+    '#required' => false,
+  );
+  
+  $form['basic_entity'] = array(
+    '#type' => 'value',
+    '#value' => $entity,
+  );
+
+  field_attach_form('photo_library', $entity, $form, $form_state);
+
+  $form['submit'] = array(
+    '#type' => 'submit', 
+    '#value' => !empty($entity->id) ? t('Update image') : t('Save image'),
+    '#weight' => 50,
+  );
+
+  return $form;
+}
+
+/**
+ * Form submit handler: Submits basic_add_form information.
+ */
+function photo_library_form_submit($form, &$form_state) {
+    $entity = $form_state['values']['basic_entity'];
+
+    $entity->title = $form_state['values']['title'];
+    $entity->category = $form_state['values']['category'];
+
+    if (isset($form_state['values']['image']) && $form_state['values']['image'] > 0) {
+      $file = file_load($form_state['values']['image']);
+
+      $file->status = FILE_STATUS_PERMANENT;
+
+      file_save($file);
+      file_usage_add($file, 'photo_library', 'file', $file->fid);
+
+      $entity->image = $file->fid;
+    }
+
+    field_attach_submit('photo_library', $entity, $form, $form_state);
+    $entity = photo_library_save($entity);
+    $form_state['redirect'] = 'admin/manage/photo_library';
+}
+
+/**
+ * We save the entity by calling the controller.
+ */
+function photo_library_save(&$entity) {
+  return entity_get_controller('photo_library')->save($entity);
+}
+
+/**
+ * Fetch a basic object.
+ *
+ * This function ends up being a shim between the menu system and
+ * schedule_load_multiple().
+ *
+ * This function gets its name from the menu system's wildcard
+ * naming conventions. For example, /path/%wildcard would end
+ * up calling wildcard_load(%wildcard value). In our case defining
+ * the path: examples/entity_example/basic/%entity_example_basic in
+ * hook_menu()
+ *
+ * @param int $sid
+ *   Integer specifying the schedule entity id.
+ * @param bool $reset
+ *   A boolean indicating that the internal cache should be reset.
+ *
+ * @return object
+ *   A fully-loaded $basic object or FALSE if it cannot be loaded.
+ *
+ * @see schedule_load_multiple()
+ * @see schedule_menu()
+ */
+function photo_library_load($id = NULL, $reset = FALSE) {
+  $ids = (isset($id) ? array($id) : array());
+  $data = photo_library_multiple($ids, array(), $reset);
+  return $data ? reset($data) : FALSE;
+}
+
+/**
+ * Loads multiple schedule entities.
+ *
+ * We only need to pass this request along to entity_load(), which
+ * will in turn call the load() method of our entity controller class.
+ */
+function photo_library_multiple($ids = FALSE, $conditions = array(), $reset = FALSE) {
+   return entity_load('photo_library', $ids, $conditions, $reset);
+}
+
+/**
+* Form builder for the comment overview administration form.
+*
+* @param $arg
+*   Current path's fourth component: the type of overview form ('approval' or
+*   'new').
+*
+* @ingroup forms
+* @see comment_admin_overview_validate()
+* @see comment_admin_overview_submit()
+* @see theme_comment_admin_overview()
+*/
+function photo_library_overview($form, $arg = 'new') {
+// Build an 'Update options' form.
+// Load the schedules that need to be displayed.
+  $header = array(
+    'id' => array('data' => t('Image ID')),
+    'title' => array('data' => t('Title')),
+    'category' => array('data' => t('Category')),
+    'operations' => array('data' => t('Operation')),
+    );
+
+  $destination = drupal_get_destination();
+  $nodes = db_select('photo_library', 'a')->extend('PagerDefault')
+    ->fields('a', array())
+    ->orderBy('title', 'ASC')
+    ->limit(50)
+    ->execute();
+
+  $options = array();
+  $i = 0;
+  $current = '';
+
+  foreach ($nodes as $node) {
+
+    $options[$i] = array(                
+      'id' => array(
+        'data' => array(
+          '#type' => 'item',
+          '#title' => $node->id,
+          '#attributes' => array('class' => array('mytable')),
+        ),
+      ),
+      'title' => array(
+        'data' => array(
+          '#type' => 'item',
+          '#title' => $node->title,
+          '#attributes' => array('class' => array('mytable')),
+        ),
+      ),      
+      'category' => array(
+        'data' => array(
+          '#type' => 'item',
+          '#title' => get_categories($node->category),
+          '#attributes' => array('class' => array('mytable')),
+        ),
+      ),
+    );
+    // Build a list of all the accessible operations for the current node.
+    $operations = array();
+    $operations['edit'] = array(
+      'title' => t('edit'),
+      'href' => 'admin/manage/photo_library/' . $node->id . '/edit',
+      'query' => $destination,
+    );
+    $operations['delete'] = array(
+      'title' => t('delete'),
+      'href' => 'admin/manage/photo_library/' . $node->id . '/delete',
+      'query' => $destination,
+    );
+    $options[$i]['operations'] = array();
+    if (count($operations) > 1) {
+      // Render an unordered list of operations links.
+      $options[$i]['operations'] = array(
+        'data' => array(
+          '#theme' => 'links__node_operations',
+          '#links' => $operations,
+          '#attributes' => array('class' => array('links', 'inline')),
+        ),
+      );
+    }
+    elseif (!empty($operations)) {
+      // Render the first and only operation as a link.
+      $link = reset($operations);
+      $options[$i]['operations'] = array(
+        'data' => array(
+          '#type' => 'link',
+          '#title' => $link['title'],
+          '#href' => $link['href'],
+          '#options' => array('query' => $link['query']),
+        ),
+      );
+    }
+    $i++;
+  }
+
+  $form['photo_gallery'] = array(
+    '#theme'  => 'table',
+    '#header' => $header,
+    '#rows'   => $options,
+  );
+
+  $form['pager'] = array('#theme' => 'pager');
+
+  return $form;
+}
+
+/*
+* Implements hook_entity_info().
+*/
+function photo_library_entity_info() {
+
+  $info = array();
+
+  $info['photo_library'] = array(
+    'label' => t('Photo Library'),
+    'controller class' => 'PhotoLibraryController',
+    'base table' => 'photo_library',
+    'uri callback' => 'photo_library_uri',
+    'fieldable' => TRUE,
+    'entity keys' => array(
+      'id' => 'id',
+    ),
+    'bundle keys' => array(),
+    'static cache' => FALSE,
+    'bundles' => array(),
+    'view modes' => array(),
+  );
+
+  return $info;
+}
+
+/**
+ * ScheduleControllerInterface definition.
+ *
+ * We create an interface here because anyone could come along and
+ * use hook_entity_info_alter() to change our controller class.
+ * We want to let them know what methods our class needs in order
+ * to function with the rest of the module, so here's a handy list.
+ *
+ * @see hook_entity_info_alter()
+ */
+interface PhotoLibraryControllerInterface
+  extends DrupalEntityControllerInterface {
+
+  /**
+   * Create an entity.
+   */
+  public function create();
+
+  /**
+   * Save an entity.
+   *
+   * @param object $entity
+   *   The entity to save.
+   */
+  public function save($entity);
+
+  /**
+   * Delete an entity.
+   *
+   * @param object $entity
+   *   The entity to delete.
+   */
+  public function delete($entity);
+
+}
+
+/**
+ * ScheduleController extends DrupalDefaultEntityController.
+ *
+ * Our subclass of DrupalDefaultEntityController lets us add a few
+ * important create, update, and delete methods.
+ */
+class PhotoLibraryController
+  extends DrupalDefaultEntityController
+  implements PhotoLibraryControllerInterface {
+
+  /**
+   * Create and return a new schedule entity.
+   */
+  public function create() {
+    $entity = new stdClass();
+    $entity->type = 'photo_library';
+    $entity->id = 0;
+    $entity->title = '';
+    $entity->image = '';
+    $entity->category = '';
+    return $entity;
+  }
+
+  /**
+   * Saves the custom fields using drupal_write_record().
+   */
+  public function save($entity) {
+    // If our entity has no basic_id, then we need to give it a
+    // time of creation.
+    if (empty($entity->id)) {
+      $entity->created = date("Y-m-d H:i:s", time());
+    } else {
+        $entity->modified = date("Y-m-d H:i:s", time());
+    }
+    // Invoke hook_entity_presave().
+    module_invoke_all('entity_presave', $entity, 'photo_library');
+    // The 'primary_keys' argument determines whether this will be an insert
+    // or an update. So if the entity already has an ID, we'll specify
+    // basic_id as the key.
+    $primary_keys = $entity->id ? 'id' : array();
+    // Write out the entity record.
+    drupal_write_record('photo_library', $entity, $primary_keys);
+    // We're going to invoke either hook_entity_update() or
+    // hook_entity_insert(), depending on whether or not this is a
+    // new entity. We'll just store the name of hook_entity_insert()
+    // and change it if we need to.
+    $invocation = 'entity_insert';
+    // Now we need to either insert or update the fields which are
+    // attached to this entity. We use the same primary_keys logic
+    // to determine whether to update or insert, and which hook we
+    // need to invoke.
+    if (empty($primary_keys)) {
+      field_attach_insert('photo_library', $entity);
+    }
+    else {
+      field_attach_update('photo_library', $entity);
+      $invocation = 'entity_update';
+    }
+    // Invoke either hook_entity_update() or hook_entity_insert().
+    module_invoke_all($invocation, $entity, 'photo_library');
+    return $entity;
+  }
+
+  /**
+   * Delete a single entity.
+   *
+   * Really a convenience function for deleteMultiple().
+   */
+  public function delete($entity) {
+    $this->deleteMultiple(array($entity));
+  }
+
+
+  /**
+   * Delete one or more schedule entities.
+   *
+   * Deletion is unfortunately not supported in the base
+   * DrupalDefaultEntityController class.
+   *
+   * @param array $entities
+   *   An array of entity IDs or a single numeric ID.
+   */
+  public function deleteMultiple($entities) {
+    $basic_ids = array();
+    if (!empty($entities)) {
+      $transaction = db_transaction();
+      try {
+        foreach ($entities as $entity) {
+          // Invoke hook_entity_delete().
+          module_invoke_all('entity_delete', $entity, 'photo_library');
+          field_attach_delete('photo_library', $entity);
+          $sids[] = $entity->id;
+        }
+        db_delete('photo_library')
+          ->condition('id', $sids, 'IN')
+          ->execute();
+      }
+      catch (Exception $e) {
+        $transaction->rollback();
+        watchdog_exception('photo_library', $e);
+        throw $e;
+      }
+    }
+  }
+}
+
+class MyPager extends PagerDefault {
+
+  /**
+   * Overrides PagerDefault::execute().
+   */
+  public function execute() {
+    // Add convenience tag to mark that this is an extended query. We have to
+    // do this in the constructor to ensure that it is set before preExecute()
+    // gets called.
+    if (!$this->preExecute($this)) {
+      return NULL;
+    }
+
+    // A NULL limit is the "kill switch" for pager queries.
+    if (empty($this->limit)) {
+      return;
+    }
+    $this->ensureElement();
+
+    // Get the total items from our new statically cached function.
+    $total_items = $this->getTotalItemCount();
+
+    $current_page = pager_default_initialize($total_items, $this->limit);
+    $this->range($current_page * $this->limit, $this->limit);
+
+    // Now that we've added our pager-based range instructions, run the query normally.
+    return $this->query->execute();
+  }
+
+  /**
+   * Cache the results of PagerDefault::getCountQuery().
+   */
+  public function getTotalItemCount() {
+    static $total_items = NULL;
+
+    if ($total_items === NULL) {
+      $total_items = $this->getCountQuery()->execute()->fetchField();
+    }
+
+    return $total_items;
+  }
+
+}

@@ -1,0 +1,6 @@
+name = Photo Library
+description = Drupal module to show photo library
+package = Custom modules
+core = 7.x
+dependencies[] = block
+configure = admin/config/photo_library
